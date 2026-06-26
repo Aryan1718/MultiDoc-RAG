@@ -30,7 +30,7 @@ pillow==12.2.0
 
 # Auth
 python-jose[cryptography]==3.4.0
-python-multipart==0.0.27
+python-multipart==0.0.30
 
 # Text Processing
 tiktoken==0.5.2
