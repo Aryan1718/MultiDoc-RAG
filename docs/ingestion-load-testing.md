@@ -1,17 +1,24 @@
 # Ingestion Load Testing
 
-Use `scripts/ingestion_load_test.py` to run repeatable ingestion benchmarks through the real API, Supabase upload URLs, Redis queues, and workers.
+Use `scripts/ingestion_load_test.py` to run repeatable ingestion benchmarks against the real MultiDoc-RAG API, signed upload flow, Redis queues, and workers.
+
+## What This Covers
+
+- batch upload prepare and complete
+- polling ingestion runs to terminal state
+- queue snapshots during processing
+- per-run JSON artifacts for comparison across revisions
 
 ## Prerequisites
 
-- Server and workers are running with Docker Compose.
-- Supabase schema has been updated with `scripts/schema.supabase.sql`.
-- You have a valid app bearer token for a user with a workspace.
+- Docker Compose services are running
+- schema changes have been applied with `scripts/schema.local.sql` or `scripts/schema.supabase.sql`
+- you have a valid bearer token for a user with a workspace
 
 ## PowerShell Examples
 
 ```powershell
-cd H:\varun\MultiDoc-RAG\MultiDoc-RAG
+cd D:\Desktop\projects\MultiDoc-RAG
 $env:RAG_BEARER_TOKEN = "<paste access token>"
 python scripts\ingestion_load_test.py --count 10 --scenario valid
 python scripts\ingestion_load_test.py --count 25 --scenario valid
@@ -19,16 +26,23 @@ python scripts\ingestion_load_test.py --count 50 --scenario valid
 python scripts\ingestion_load_test.py --count 10 --scenario mixed
 ```
 
-The script writes comparable JSON artifacts to:
+## Output
+
+Artifacts are written to:
 
 ```text
 artifacts/ingestion-load/
 ```
 
-Each artifact includes prepare/complete responses, final ingestion-run state, current document list, total wall-clock duration, prepare/upload duration, and queue snapshots captured while polling.
+Each artifact includes:
+- prepare and complete responses
+- ingestion-run state
+- document snapshots
+- queue snapshots collected while polling
+- total wall-clock duration
+- upload and prepare timing
 
-## Notes
+## Recent Related Changes
 
-- The generated PDFs are one-page text PDFs with deterministic names.
-- The mixed scenario replaces the final generated file with an invalid text file to confirm isolated failures.
-- Use `--timeout-seconds` and `--poll-seconds` to tune long runs.
+- `9fd2a85` on 2026-06-08: added load-test tooling and supporting ingestion hardening
+- `bffd3ed` on 2026-06-08: fixed security scan findings for generated load-test artifacts
