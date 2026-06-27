@@ -1,146 +1,49 @@
-# Client
+# MultiDoc-RAG Client
 
-`client/` is the React frontend for Enterprise RAG. It handles authentication with Supabase, workspace onboarding, document upload UX, document-aware chat, and observability views.
+`client/` is the React frontend for MultiDoc-RAG. It handles Supabase auth, workspace onboarding, multi-file upload flows, document monitoring, single-document chat, and observability dashboards.
 
-## Responsibilities
+## What It Does Today
 
-- sign in and sign up users with Supabase Auth
-- keep the current session and bearer token in client state
-- route users through workspace creation before entering the app shell
-- upload PDFs through the API + Supabase signed URL flow
-- display ingestion progress and document status
-- run streaming grounded chat against the selected document
-- show citations, sources, usage, and observability metrics
+- signs users in and out with Supabase
+- gates the app on workspace creation
+- prepares and completes batch uploads through signed URLs
+- shows ingestion-run progress, queue-aware document states, and retry actions
+- displays usage and observability metrics
+- streams grounded chat responses for the current active document
 
-## Tech Stack
+## Recent Frontend Updates
 
-- React 18
-- TypeScript
-- Vite
-- React Router
-- Supabase JS
-- Tailwind CSS utilities
-- Axios and fetch-based API calls
+- `08f452d` on 2026-06-08: upload flow now supports up to 50 files per run, accepted/rejected file summaries, grouped processing states, and retry-oriented ingestion UX
+- `0409162` on 2026-06-08: observability and upload views now surface ingestion timing
+- `b0d4fd2` on 2026-06-08: frontend dependency vulnerabilities were addressed
 
-## App Structure
+## Important Current Constraint
 
-```text
-client/
-├── src/
-│   ├── App.tsx                   # top-level routes
-│   ├── context/AuthContext.tsx   # session lifecycle and auth actions
-│   ├── lib/api.ts                # typed API client
-│   ├── lib/supabase.ts           # Supabase client
-│   ├── pages/
-│   │   ├── Login.tsx
-│   │   ├── Signup.tsx
-│   │   ├── WorkspaceGate.tsx
-│   │   ├── UploadPage.tsx
-│   │   ├── ChatPage.tsx
-│   │   ├── ObservabilityPage.tsx
-│   │   └── WorkspaceInfoPage.tsx
-│   ├── components/
-│   │   ├── layout/
-│   │   ├── upload/
-│   │   ├── chat/
-│   │   └── documents/
-│   └── styles/
-├── package.json
-└── vite.config.ts
-```
+The upload UX is multi-document aware, but the chat UX is still single-document oriented. The backend query API already accepts `document_ids`, but [client/src/pages/ChatPage.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/pages/ChatPage.tsx:1) still submits one active `document_id`.
 
-## Route Map
+## Main Routes
 
-Public routes:
+Public:
 - `/login`
 - `/signup`
 
-Authenticated routes:
+Authenticated:
 - `/workspace`
 - `/app/upload`
 - `/app/chat`
 - `/app/observability`
 - `/app/workspace`
 
-Top-level flow in `src/App.tsx`:
-1. unauthenticated users are redirected to `/login`
-2. authenticated users are redirected to `/workspace`
-3. workspace setup routes the user into `/app/*`
-4. protected app routes render inside the shared app shell
+## Key Files
 
-## UX Flows
+- [src/context/AuthContext.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/context/AuthContext.tsx:1)
+- [src/lib/api.ts](/D:/Desktop/projects/MultiDoc-RAG/client/src/lib/api.ts:1)
+- [src/pages/UploadPage.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/pages/UploadPage.tsx:1)
+- [src/components/upload/UploadPanel.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/components/upload/UploadPanel.tsx:1)
+- [src/pages/ChatPage.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/pages/ChatPage.tsx:1)
+- [src/pages/ObservabilityPage.tsx](/D:/Desktop/projects/MultiDoc-RAG/client/src/pages/ObservabilityPage.tsx:1)
 
-### Authentication
-
-`AuthContext` is the session source of truth.
-
-Current behavior:
-- reads the initial Supabase session on load
-- subscribes to auth state changes
-- exposes `signIn`, `signUp`, and `signOut`
-- registers a global unauthorized handler so API `401` responses log the user out and redirect to `/login`
-
-Primary files:
-- `src/context/AuthContext.tsx`
-- `src/lib/supabase.ts`
-- `src/lib/api.ts`
-
-### Document Upload
-
-Upload UX is centered in `UploadPage` and `components/upload/UploadPanel`.
-
-Flow:
-1. select and review up to 50 PDFs as one upload run
-2. request `POST /documents/upload-prepare-batch`
-3. upload accepted PDFs directly to their signed URLs
-4. notify the backend with `POST /documents/upload-complete-batch`
-5. poll documents, queue status, and the active ingestion run while processing is active
-6. separate active, failed, and ready documents for recovery and review
-
-Current behavior:
-- shows selected files before upload starts
-- shows accepted/rejected/processing/ready/failed counts for the current run
-- shows live document status grouped by workflow state
-- supports search, status filtering, and sorting for larger document sets
-- supports retrying failed documents individually or in a retryable batch
-- refreshes every 4 seconds while documents are processing
-- treats `ready` and `indexed` as successful ingest states
-
-### Chat and Streaming Query
-
-`ChatPage` drives the main RAG interaction.
-
-Current behavior:
-- binds the active document from the app shell context
-- streams answer deltas from `POST /query/stream`
-- loads citations and source text on demand
-- persists and restores draft transcript state locally
-- stores chat sessions with `/chats/sessions`
-- updates usage metrics in the app shell after responses
-
-Primary files:
-- `src/pages/ChatPage.tsx`
-- `src/components/chat/*`
-- `src/lib/api.ts`
-
-### Observability
-
-`ObservabilityPage` renders a workspace-level operational summary using `GET /usage/observability`.
-
-Displayed metrics:
-- total queries
-- 24-hour queries and errors
-- error rate
-- average latency
-- p95 latency
-- tokens used and remaining
-- document pipeline health
-- top queried documents
-- recent query errors
-
-## API Contracts Used
-
-The client currently uses these backend APIs:
+## APIs Used
 
 - `GET /auth/me`
 - `POST /workspaces`
@@ -148,14 +51,15 @@ The client currently uses these backend APIs:
 - `GET /documents`
 - `GET /documents/{document_id}`
 - `GET /documents/{document_id}/pages/{page_number}`
+- `GET /documents/ingestion-runs/{run_id}`
+- `GET /documents/ingestion-queues`
 - `POST /documents/upload-prepare`
 - `POST /documents/upload-complete`
 - `POST /documents/upload-prepare-batch`
 - `POST /documents/upload-complete-batch`
-- `GET /documents/ingestion-runs/{run_id}`
-- `GET /documents/ingestion-queues`
-- `DELETE /documents/{document_id}`
 - `POST /documents/{document_id}/retry`
+- `POST /documents/{document_id}/reindex`
+- `DELETE /documents/{document_id}`
 - `POST /query/stream`
 - `GET /citations/{chunk_id}`
 - `GET /queries`
@@ -167,20 +71,12 @@ The client currently uses these backend APIs:
 - `GET /usage/today`
 - `GET /usage/observability`
 
-All authenticated requests send:
-
-```http
-Authorization: Bearer <supabase_access_token>
-```
-
 ## Environment
-
-Create `client/.env` with:
 
 ```bash
 VITE_API_URL=http://localhost:8000
 VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-public-anon-key
+VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
 ## Run
@@ -190,33 +86,3 @@ cd client
 npm install
 npm run dev -- --host 0.0.0.0
 ```
-
-Build for production:
-
-```bash
-npm run build
-```
-
-Preview the built app:
-
-```bash
-npm run preview
-```
-
-## Development Commands
-
-```bash
-cd client
-npm run dev
-npm run build
-npm run lint
-npm run test
-```
-
-## Notes for Contributors
-
-- `src/lib/api.ts` is the contract layer; keep request and response types aligned with the backend
-- auth redirects are centralized through the unauthorized handler, so avoid duplicating logout-on-401 logic elsewhere
-- chat is document-scoped in the current UI model
-- upload and polling behavior assume asynchronous backend processing states
-- preserve the existing visual language unless the task is explicitly a redesign

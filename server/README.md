@@ -1,39 +1,25 @@
-# Server
+# MultiDoc-RAG Server
 
-`server/` is the FastAPI backend for Enterprise RAG. It owns authentication, workspace resolution, document APIs, grounded query orchestration, token budget enforcement, and observability endpoints.
+`server/` is the FastAPI backend for MultiDoc-RAG. It owns auth validation, workspace resolution, document orchestration, query execution, token budgets, chat/session APIs, and observability.
 
-## Responsibilities
+## What Is Implemented
 
-- validate Supabase JWTs
-- resolve the caller's workspace
-- manage document upload preparation and upload completion
-- enqueue extraction and indexing jobs
-- execute grounded RAG queries and SSE streaming queries
-- track daily token usage with reserve/commit/release semantics
-- expose query history, citations, chat sessions, and observability data
+- Supabase JWT validation and workspace-scoped access
+- single-file and batch upload prepare/complete APIs
+- ingestion-run tracking, queue inspection, ingestion health, and reconciliation endpoints
+- retry and reindex flows
+- grounded query and streaming query APIs
+- backend support for querying across multiple selected documents
+- daily token reservation, commit, release, and usage reporting
+- query history, citation lookup, and chat session APIs
 
-## Module Layout
+## Recent Backend Updates
 
-```text
-server/
-├── app/
-│   ├── main.py               # FastAPI app and router registration
-│   ├── config.py             # environment settings and UTC helpers
-│   ├── api/                  # route handlers
-│   ├── core/                 # auth, retrieval, llm, embeddings, token budget
-│   ├── db/                   # SQLAlchemy session, models, repositories
-│   ├── schemas/              # request and response schemas
-│   ├── storage/              # Supabase storage integration
-│   └── utils/                # rate limiting and logging helpers
-├── migrations/               # Alembic environment and revisions
-├── tests/
-├── requirements.txt
-└── pyproject.toml
-```
+- `08f452d` on 2026-06-08: batch upload contracts, ingestion-run APIs, upload policy helpers, and stronger worker failure callbacks
+- `9fd2a85` on 2026-06-08: stale ingestion reconciliation, multi-document query contract support, retrieval updates, and broader ingestion tests
+- `f3ad7db` on 2026-06-06: token budget lock-contention fix for streaming queries and Supabase setup cleanup
 
 ## API Surface
-
-Routes registered in `app/main.py`:
 
 - `GET /health`
 - `GET /auth/me`
@@ -42,8 +28,14 @@ Routes registered in `app/main.py`:
 - `GET /documents`
 - `GET /documents/{document_id}`
 - `GET /documents/{document_id}/pages/{page_number}`
+- `GET /documents/ingestion-queues`
+- `GET /documents/ingestion-health`
+- `POST /documents/ingestion-reconcile`
+- `GET /documents/ingestion-runs/{run_id}`
 - `POST /documents/upload-prepare`
 - `POST /documents/upload-complete`
+- `POST /documents/upload-prepare-batch`
+- `POST /documents/upload-complete-batch`
 - `POST /documents/{document_id}/retry`
 - `POST /documents/{document_id}/reindex`
 - `DELETE /documents/{document_id}`
@@ -59,184 +51,46 @@ Routes registered in `app/main.py`:
 - `GET /usage/today`
 - `GET /usage/observability`
 
-## Request Flow
+## Query Model Today
 
-### Auth and Workspace Resolution
+The server accepts both legacy `document_id` and new `document_ids` payloads. Query validation and retrieval can span up to `10` selected documents and up to `100` total pages.
 
-1. Client sends `Authorization: Bearer <token>`.
-2. `app/api/deps.py` validates bearer presence.
-3. `app/core/auth.py` validates the JWT with Supabase.
-4. `get_workspace_id()` resolves the current user's workspace.
-5. Workspace-scoped routes operate only within that resolved `workspace_id`.
+Relevant files:
+- [app/schemas/query.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/schemas/query.py:1)
+- [app/api/query.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/api/query.py:1)
+- [app/api/query_stream.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/api/query_stream.py:1)
+- [app/core/retrieval.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/core/retrieval.py:1)
 
-Primary files:
-- `app/api/deps.py`
-- `app/core/auth.py`
-- `app/api/workspaces.py`
+## Ingestion Model Today
 
-### Document Upload Lifecycle
+- file validation begins in the API
+- upload completion verifies the storage object and enqueues extract jobs
+- extraction revalidates file shape and page/content limits
+- indexing batches embeddings and writes chunks/vectors idempotently
+- reconciliation can fail stale active documents and refresh ingestion runs
 
-```text
-upload-prepare -> upload-complete -> enqueue extract -> extract pages
-               -> enqueue index -> create chunks/embeddings -> ready
-```
+Relevant files:
+- [app/api/documents.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/api/documents.py:1)
+- [app/core/ingestion_policy.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/core/ingestion_policy.py:1)
+- [app/core/ingestion_reconciliation.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/core/ingestion_reconciliation.py:1)
+- [app/core/ingestion_runs.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/core/ingestion_runs.py:1)
 
-What the API does:
-- validates file size and content type
-- enforces document count limits
-- creates placeholder document records
-- issues signed upload URLs through Supabase Storage
-- verifies uploaded object existence
-- enqueues RQ jobs for extraction and indexing
-- supports retry, reindex, and delete flows
+## Environment Highlights
 
-Primary files:
-- `app/api/documents.py`
-- `app/core/storage.py`
-
-### Query Lifecycle
-
-```text
-question -> embed question -> retrieve top-k chunks -> reserve tokens
-         -> call LLM -> commit actual usage -> return answer + citations
-```
-
-What happens in code:
-- question embedding comes from `app/core/embeddings.py`
-- vector retrieval comes from `app/core/retrieval.py`
-- grounded prompting and LLM calls come from `app/core/llm.py` and `app/core/prompts.py`
-- token reservation and usage accounting come from `app/core/token_budget.py`
-- query metadata is logged into `query_logs` when enabled
-
-Primary files:
-- `app/api/query.py`
-- `app/api/query_stream.py`
-- `app/core/retrieval.py`
-- `app/core/llm.py`
-- `app/core/token_budget.py`
-
-## Core Subsystems
-
-### Token Budget
-
-The server enforces a daily workspace token limit using `workspace_daily_usage`.
-
-Operations:
-- `reserve_tokens()`
-- `release_tokens()`
-- `commit_usage()`
-- `get_budget_status()`
-
-Behavior:
-- reservations are acquired before LLM work
-- actual usage is committed after the model returns
-- unused reserved tokens are released
-- stale reservations are cleaned separately by the worker maintenance job
-
-Primary file:
-- `app/core/token_budget.py`
-
-### Retrieval
-
-The retrieval layer reads vectors from `chunk_embeddings` and chunk/page text from Postgres.
-
-Current behavior:
-- query embedding is turned into a `pgvector` literal
-- cosine distance query returns top-k chunks for one document
-- each result includes chunk text, page text, score, and token count
-
-Primary file:
-- `app/core/retrieval.py`
-
-### Rate Limiting
-
-Redis-backed per-workspace rate limiting is enforced in the API.
-
-Current limits:
-- queries: `100` requests / `60s`
-- upload prepare: `10` requests / `60s`
-- upload complete and retry/reindex mutations: `20` requests / `60s`
-
-Primary files:
-- `app/core/rate_limit.py`
-- `app/utils/rate_limit.py`
-
-## Data Model
-
-The server depends on these core tables:
-
-- `workspaces`
-- `documents`
-- `document_pages`
-- `chunks`
-- `chunk_embeddings`
-- `workspace_daily_usage`
-- `query_logs`
-- `chat_sessions`
-
-Current SQLAlchemy models are defined in `app/db/models.py`. Full schema scripts live under `../scripts/`.
-
-## Environment
-
-Minimal server environment:
-
-```bash
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-SUPABASE_KEY=your-service-role-key
-SUPABASE_STORAGE_BUCKET=documents
-
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/enterprise_rag
-REDIS_URL=redis://localhost:6379/0
-OPENAI_API_KEY=sk-...
-
-ENVIRONMENT=development
-API_HOST=0.0.0.0
-API_PORT=8000
-DAILY_TOKEN_LIMIT=100000
-RESERVATION_TTL_SECONDS=600
-LLM_MODEL=gpt-4o-mini
-EMBEDDING_MODEL=text-embedding-3-small
-```
+Important settings in [app/config.py](/D:/Desktop/projects/MultiDoc-RAG/server/app/config.py:1):
+- `MAX_FILE_SIZE_BYTES=10485760`
+- `MAX_PDF_PAGE_COUNT=10`
+- `MAX_BULK_UPLOAD_FILES=50`
+- `MAX_QUERY_DOCUMENTS=10`
+- `MAX_QUERY_TOTAL_PAGES=100`
+- `EMBEDDING_BATCH_SIZE=32`
+- `INGEST_EXTRACT_JOB_TIMEOUT_SECONDS=900`
+- `INGEST_INDEX_JOB_TIMEOUT_SECONDS=1800`
 
 ## Run
 
-### Local
-
 ```bash
 cd server
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
-### Docker Compose
-
-```bash
-docker-compose up server
-```
-
-Health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-## Development Commands
-
-```bash
-cd server
-pytest
-ruff check .
-black --check .
-mypy app
-```
-
-## Notes for Contributors
-
-- keep every data access path workspace-scoped
-- do not bypass the token budget layer for query-time model usage
-- document status transitions matter because workers and UI depend on them
-- `app/core/chunking.py` is still a placeholder; worker-side chunking is currently the active path
-- if you add endpoints, register them in `app/main.py` and add corresponding schemas
